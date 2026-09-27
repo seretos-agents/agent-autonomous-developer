@@ -78,4 +78,4 @@ jobs:
         run: pip install -e ".[test]"
 
       - name: Run pytest (shell-executing tests only)
-        run: python -m pytest -q tests/test_release_scripts.py tests/test_ci_wait_resolution.py
+        run: python -m pytest -q tests/test_release_scripts.py tests/test_ci_wait_resolution.py tests/test_developer_commit.py tests/test_live_kill_test.py
