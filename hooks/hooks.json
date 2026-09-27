@@ -1,0 +1,50 @@
+{
+  "description": "Refuse every backgrounded command, every Monitor call, and every backgrounded Agent dispatch up front inside a process-developer run or one of this plugin's subagents (ticket #101, extended to Agent by #139); abort the pipeline when agent-project-issues MCP is unavailable during context extraction; block the developer subagent from ending its turn with an unresolved backgrounded command (ticket #93); block the process-developer session itself from ending its turn with an unresolved backgrounded command or subagent dispatch, or with work no remote has (ticket #23).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/check-no-background.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "context-extractor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/check-mcp-availability.mjs\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "developer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/check-developer-background-wait.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/check-session-turn-end.mjs\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

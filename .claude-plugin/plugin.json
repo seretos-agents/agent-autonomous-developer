@@ -1,0 +1,14 @@
+{
+  "name": "agent-autonomous-developer",
+  "description": "Takes one work package (a ticket or an epic with all its children) from a prepared worktree to a pull request with a GREEN CI pipeline, for projects in any language (stack auto-detected). One headless skill — process-developer — backed by six subagents (context-extractor, planner, plan-critic, developer, test-critic, reviewer) with isolated critics, three-round caps and machine-readable progress events on the ticket. Never asks a human. Drives the agent-project-issues MCP.",
+  "version": "0.5.4",
+  "author": {
+    "name": "Arne von Appen"
+  },
+  "dependencies": [
+    {
+      "name": "agent-project-issues",
+      "version": ">=0.2.5 <1.0.0"
+    }
+  ]
+}
