@@ -1,0 +1,8 @@
+# Written by check-critic-isolation.sh --live. Do not edit by hand: the point of this file
+# is that it records a measurement that was actually taken, not a version someone believed
+# was fine. Re-run the script to update it.
+claude_version: 2.1.241 (Claude Code)
+verified_utc: 2026-08-23T15:17:17Z
+verified: isolated process has no tools, does not obey a CLAUDE.md in its own cwd, and
+          runs on a context too small for skills/hooks/MCP servers to have been loaded
+flags: --setting-sources --strict-mcp-config --disable-slash-commands --tools --system-prompt --json-schema

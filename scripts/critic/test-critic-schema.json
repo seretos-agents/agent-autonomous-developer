@@ -1,0 +1,75 @@
+{
+  "type": "object",
+  "properties": {
+    "assertion_assessments": {
+      "type": "array",
+      "description": "One entry per assertion in the test code, judged individually. No overall verdict.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "test_name": { "type": "string", "description": "The test method the assertion lives in." },
+          "assertion": { "type": "string", "description": "The assertion itself, quoted from the test code." },
+          "criterion": { "type": "string", "description": "The part of the requirement this assertion is supposed to prove, quoted." },
+          "surviving_implementations": {
+            "type": "array",
+            "description": "Concrete faulty implementations that would make this assertion pass. Empty means none could be constructed.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "implementation": { "type": "string", "description": "What the faulty implementation actually does, concretely." },
+                "killed_by": { "type": "string", "description": "Another case in this batch that would catch it, if there is one; empty if it survives the whole batch." }
+              },
+              "required": ["implementation"],
+              "additionalProperties": false
+            }
+          },
+          "verdict": {
+            "type": "string",
+            "enum": ["bites", "suspect", "undetermined"],
+            "description": "bites = only genuinely correct implementations pass. suspect = an implementation doing nothing toward the requirement survives the whole batch, or the assertion cannot come out false at all. undetermined = no faulty implementation could be constructed either way."
+          },
+          "assessment": { "type": "string", "description": "Why the assertion does or does not constrain the requirement." }
+        },
+        "required": ["test_name", "assertion", "criterion", "surviving_implementations", "verdict", "assessment"],
+        "additionalProperties": false
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Concrete problems. Empty is a valid and expected result for a good test batch.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "what": { "type": "string", "description": "What the problem actually is, in plain terms." },
+          "test_name": { "type": "string", "description": "The test method this finding is about." },
+          "violated_criterion": { "type": "string", "description": "The part of the requirement left unproven, quoted." },
+          "surviving_implementation": { "type": "string", "description": "The faulty implementation that passes anyway, concretely — or, for a tautological assertion, why it can never come out false." },
+          "layer": {
+            "type": "string",
+            "enum": ["plan", "test-code"],
+            "description": "plan = the plan stated the expected behaviour too weakly to derive a biting assertion; test-code = the plan named a checkable outcome the test failed to check."
+          },
+          "kind": { "type": "string", "enum": ["tautological-assertion", "unconstrained-requirement", "wrong-seam", "risk", "unverified-assumption"] },
+          "severity": { "type": "string", "enum": ["critical", "major", "minor"] },
+          "evidence": { "type": "string", "description": "The passage of the test code or plan this is based on." }
+        },
+        "required": ["id", "title", "what", "test_name", "violated_criterion", "layer", "kind", "severity"],
+        "additionalProperties": false
+      }
+    },
+    "solid": {
+      "type": "array",
+      "description": "Assertions that clearly constrain a named part of the requirement, with the faulty implementations they kill.",
+      "items": { "type": "string" }
+    },
+    "unverifiable_without_codebase_access": {
+      "type": "array",
+      "description": "Claims the test code makes about existing types/APIs/assets/behaviour that could not be checked from the package alone.",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["assertion_assessments", "findings", "solid"],
+  "additionalProperties": false
+}

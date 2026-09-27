@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "description": "Concrete problems. Empty is a valid and expected result for a good plan.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "what": { "type": "string", "description": "What the problem actually is, in plain terms." },
+          "violated_criterion": { "type": "string", "description": "The requirement this violates, quoted from the specification." },
+          "kind": { "type": "string", "enum": ["gap", "contradiction", "double-claim", "risk", "unverified-assumption"] },
+          "severity": { "type": "string", "enum": ["critical", "major", "minor"] },
+          "evidence": { "type": "string", "description": "The passage of the plan this is based on." }
+        },
+        "required": ["id", "title", "what", "violated_criterion", "kind", "severity"],
+        "additionalProperties": false
+      }
+    },
+    "solid": {
+      "type": "array",
+      "description": "Parts of the plan that clearly satisfy a named requirement.",
+      "items": { "type": "string" }
+    },
+    "unverifiable_without_codebase_access": {
+      "type": "array",
+      "description": "Claims the plan makes about existing code/assets/behaviour that could not be checked from the package alone.",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["findings", "solid"],
+  "additionalProperties": false
+}
