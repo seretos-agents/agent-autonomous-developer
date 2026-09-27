@@ -224,8 +224,16 @@ def test_hook_exists_and_is_wired():
     entries = [e for e in pre if any("check-no-background.mjs" in h.get("command", "") for h in e.get("hooks", []))]
     assert entries, "hooks/hooks.json must wire hooks/check-no-background.mjs under PreToolUse."
     matcher = entries[0].get("matcher", "")
-    assert re.fullmatch(matcher, "Bash") and re.fullmatch(matcher, "Monitor"), (
-        f"PreToolUse matcher must cover both Bash and Monitor; got {matcher!r}"
+    assert (
+        re.fullmatch(matcher, "Bash")
+        and re.fullmatch(matcher, "Monitor")
+        and re.fullmatch(matcher, "Agent")
+    ), (
+        "PreToolUse matcher must cover Bash, Monitor and Agent (ticket #139: "
+        f"a backgrounded Agent dispatch must reach this hook too); got {matcher!r}"
+    )
+    assert not re.fullmatch(matcher, "Read"), (
+        f"PreToolUse matcher must not accidentally cover Read; got {matcher!r}"
     )
     # The pre-existing hooks must survive.
     matchers = {e.get("matcher") for e in config["hooks"].get("SubagentStop", [])}
@@ -363,6 +371,82 @@ def test_ignores_other_tools_and_malformed_stdin(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Ticket #139 - a backgrounded `Agent` dispatch is refused exactly like Bash
+#
+# The Agent tool's own schema backgrounds by default: "Agents run in the
+# background by default … Set to false only when your very next action
+# depends on this agent's result". Only an explicit `run_in_background: false`
+# is a foreground dispatch; an absent key or an explicit `true` must be
+# refused before the dispatch starts, the same way Bash(run_in_background:
+# true) already is (#101). This is the mechanism a long developer dispatch
+# needs so it is never silently lost to the harness's 600s background-task
+# ceiling in print mode.
+# ---------------------------------------------------------------------------
+
+
+def _agent_input(*, run_in_background: object) -> dict:
+    """An Agent tool_input payload per the plan's P1 shape. `None` means the
+    key is absent (the real default-background case); any other value is set
+    explicitly."""
+    payload = {
+        "description": "test dispatch",
+        "subagent_type": "agent-autonomous-developer:developer",
+        "prompt": "do the thing",
+    }
+    if run_in_background is not None:
+        payload["run_in_background"] = run_in_background
+    return payload
+
+
+@pytest.mark.parametrize("run_in_background", [None, True], ids=["absent", "true"])
+def test_refuses_backgrounded_agent_dispatch_in_pipeline_run(tmp_path, run_in_background):
+    """R1 (#139): an Agent dispatch with no run_in_background key, or an
+    explicit True, backgrounds by default per the Agent tool's own schema and
+    must be refused before it runs."""
+    cwd = _pipeline_cwd(tmp_path)
+    result = _run_pre("Agent", _agent_input(run_in_background=run_in_background), cwd=cwd)
+    assert result.returncode == 2, (
+        f"expected exit 2 (refused); got {result.returncode}. "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert MARKER in result.stderr, "refusal must carry the transcript marker"
+    assert "Agent(" in result.stderr, (
+        "refusal text must describe the call as an Agent(...) dispatch, not "
+        f"a bare command; got: {result.stderr!r}"
+    )
+
+
+def test_allows_explicit_foreground_agent_dispatch(tmp_path):
+    """An explicit `run_in_background: false` is the one foreground shape and
+    must pass."""
+    cwd = _pipeline_cwd(tmp_path)
+    _assert_allowed(_run_pre("Agent", _agent_input(run_in_background=False), cwd=cwd))
+
+
+def test_stays_out_of_unscoped_session_for_agent_dispatch(tmp_path):
+    """A human's interactive session (no .adev/, no plugin agent_type) keeps
+    the Agent tool's own default background behaviour, same as it keeps
+    Monitor and backgrounded Bash."""
+    _assert_allowed(_run_pre("Agent", _agent_input(run_in_background=None), cwd=tmp_path))
+
+
+def test_refuses_agent_dispatch_for_plugin_subagent_without_adev(tmp_path):
+    """A developer dispatch is in scope even when cwd carries no `.adev/`
+    (same rule as the existing Bash/Monitor case)."""
+    result = _run_pre(
+        "Agent",
+        _agent_input(run_in_background=None),
+        cwd=tmp_path,
+        agent_type="agent-autonomous-developer:developer",
+    )
+    assert result.returncode == 2, (
+        f"expected exit 2 (refused); got {result.returncode}. "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert MARKER in result.stderr
+
+
+# ---------------------------------------------------------------------------
 # R3b - the shared transcript walk: Monitor resolves nothing, the refusal does
 # ---------------------------------------------------------------------------
 
@@ -435,5 +519,50 @@ def test_walk_foreground_only_is_clean():
     lines = [
         _assistant("Bash", {"command": "pytest tests/a.py", "timeout": 600000}),
         _assistant("Bash", {"command": "npm install && npm test"}),
+    ]
+    assert _scan(lines) is None
+
+
+# ---------------------------------------------------------------------------
+# R4 (#139) - the shared walk classifies an Agent dispatch the same way
+# ---------------------------------------------------------------------------
+
+
+def _agent_assistant(run_in_background: object) -> str:
+    input_ = {
+        "description": "dispatch developer",
+        "subagent_type": "agent-autonomous-developer:developer",
+        "prompt": "implement the plan",
+    }
+    if run_in_background is not None:
+        input_["run_in_background"] = run_in_background
+    return _assistant("Agent", input_)
+
+
+@pytest.mark.parametrize("run_in_background", [None, True], ids=["absent", "true"])
+def test_walk_detects_backgrounded_agent_dispatch(run_in_background):
+    """R4 (#139): unresolvedBackgroundCommand must classify an Agent call the
+    same way it classifies a backgrounded Bash call — absent key or explicit
+    True is unresolved."""
+    lines = [_agent_assistant(run_in_background)]
+    result = _scan(lines)
+    assert result is not None, "an Agent dispatch that backgrounds by default must not be clean"
+    assert result.startswith("Agent("), f"expected an Agent(...) label; got {result!r}"
+
+
+def test_walk_agent_dispatch_explicit_false_is_clean():
+    lines = [_agent_assistant(False)]
+    assert _scan(lines) is None
+
+
+def test_walk_agent_dispatch_refusal_marker_resolves():
+    """A call the PreToolUse hook refused never ran — the turn-end hooks must
+    not trap the agent behind it, same as the Bash case."""
+    lines = [
+        _agent_assistant(None),
+        _tool_result(
+            f"{MARKER} refused Agent(agent-autonomous-developer:developer) "
+            "(run_in_background not false (default: background)). Hard Rule …"
+        ),
     ]
     assert _scan(lines) is None
