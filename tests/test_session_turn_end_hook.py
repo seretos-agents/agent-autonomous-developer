@@ -46,6 +46,7 @@ Behavioural requirements:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -175,11 +176,21 @@ def _run_hook(cwd: pathlib.Path, transcript_lines: list[str] | None, **extra):
         transcript = cwd.parent / "transcript.jsonl"
         transcript.write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
         payload["transcript_path"] = str(transcript)
+    # Ticket #141: this file exercises the pre-existing process-developer
+    # (orchestrator) path. Strip HARNESS_LAUNCHED_AGENT from the child's env
+    # so an ambient value (set by a real harness-launched session this test
+    # happens to run inside of) can never make these tests accidentally take
+    # the new harness-developer branch instead of the path under test here —
+    # that branch has its own dedicated tests in
+    # tests/test_harness_launched_developer_stop.py.
+    env = dict(os.environ)
+    env.pop("HARNESS_LAUNCHED_AGENT", None)
     return subprocess.run(
         [node, str(HOOK_PATH)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
