@@ -430,6 +430,22 @@ def test_stays_out_of_unscoped_session_for_agent_dispatch(tmp_path):
     _assert_allowed(_run_pre("Agent", _agent_input(run_in_background=None), cwd=tmp_path))
 
 
+def test_stays_out_of_unscoped_session_for_agent_dispatch_with_foreign_agent_type(tmp_path):
+    """A foreign plugin's agent_type in an unscoped cwd keeps the Agent tool's
+    default background behaviour too — same edge case the Bash/Monitor suite
+    covers in test_stays_out_of_an_unscoped_session, extended to Agent since
+    the underlying code path (backgroundReasonForToolUse + the scope gate) is
+    shared."""
+    _assert_allowed(
+        _run_pre(
+            "Agent",
+            _agent_input(run_in_background=None),
+            cwd=tmp_path,
+            agent_type="some-other-plugin:developer-helper",
+        )
+    )
+
+
 def test_refuses_agent_dispatch_for_plugin_subagent_without_adev(tmp_path):
     """A developer dispatch is in scope even when cwd carries no `.adev/`
     (same rule as the existing Bash/Monitor case)."""
