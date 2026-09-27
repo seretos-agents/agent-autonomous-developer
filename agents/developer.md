@@ -164,8 +164,10 @@ report, never guessed and never asked interactively.
    because their maintainers measured the real numbers on the real platform.
    Those numbers beat the generic rule below, which exists for projects that
    have not measured. Read the project's `AGENTS.md` before you start the
-   suite; follow it exactly if it has such a section, and commit at whatever
-   boundaries it names, with the step-6 script.
+   suite; if it has such a section, run exactly the chunks it names, in its
+   order. Its chunk boundaries decide only how the suite is cut into
+   foreground calls. You never commit between chunks, even if that section
+   says to: the only commit is step 6, once, at the end of the dispatch.
 
    **Otherwise the full suite runs as synchronous foreground chunks, one
    `Bash` call after another, inside this turn.** There is no duration
@@ -213,7 +215,9 @@ report, never guessed and never asked interactively.
    silently ship a commit built in the wrong tree. On a mismatch, STOP: do
    **not** run step 6, and report the mismatch in the change report.
 6. **Commit — your last tool call.** End every dispatch with one foreground
-   `Bash` call with an explicit `timeout` (e.g. `timeout: 60000`):
+   `Bash` call with an explicit `timeout` (e.g. `timeout: 60000`). It runs
+   exactly once per dispatch, never earlier, whatever a project `AGENTS.md`
+   says about committing:
 
    `bash "${CLAUDE_PLUGIN_ROOT}/scripts/developer-commit.sh" <worktree_path> "<one-line summary> (#<ticket>)"`
 
