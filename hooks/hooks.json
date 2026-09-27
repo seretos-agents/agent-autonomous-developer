@@ -1,9 +1,9 @@
 {
-  "description": "Refuse every backgrounded command and every Monitor call up front inside a process-developer run or one of this plugin's subagents (ticket #101); abort the pipeline when agent-project-issues MCP is unavailable during context extraction; block the developer subagent from ending its turn with an unresolved backgrounded command (ticket #93); block the process-developer session itself from ending its turn with an unresolved backgrounded command or with work no remote has (ticket #23).",
+  "description": "Refuse every backgrounded command, every Monitor call, and every backgrounded Agent dispatch up front inside a process-developer run or one of this plugin's subagents (ticket #101, extended to Agent by #139); abort the pipeline when agent-project-issues MCP is unavailable during context extraction; block the developer subagent from ending its turn with an unresolved backgrounded command (ticket #93); block the process-developer session itself from ending its turn with an unresolved backgrounded command or subagent dispatch, or with work no remote has (ticket #23).",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Monitor",
+        "matcher": "Bash|Monitor|Agent",
         "hooks": [
           {
             "type": "command",
