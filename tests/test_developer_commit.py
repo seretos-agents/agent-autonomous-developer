@@ -108,11 +108,20 @@ def _in_rebase(repo: pathlib.Path) -> bool:
 
 
 def _run_script(work: pathlib.Path, message: str) -> subprocess.CompletedProcess:
+    """Invoke the real script under test. Must pass env=_git_env() -- unlike
+    every other subprocess call in this file, this one runs the production
+    script itself (which shells out to `git commit`), so it needs the same
+    GIT_AUTHOR_*/GIT_COMMITTER_* identity as every other git call here. A CI
+    runner has no global git identity configured (a local dev machine
+    typically does), so omitting this made every commit-path test fail with
+    "Author identity unknown" in CI while the skip-guard tests (which never
+    reach `git commit`) passed regardless."""
     _require_tool(BASH, "bash")
     return subprocess.run(
         [BASH, str(SCRIPT), str(work), message],
         capture_output=True,
         text=True,
+        env=_git_env(),
     )
 
 

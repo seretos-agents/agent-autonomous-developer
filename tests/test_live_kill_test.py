@@ -72,16 +72,17 @@ def _require_git() -> None:
     _require_tool(GIT, "git")
 
 
+_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
+
+
 def _git_env() -> dict:
     env = dict(os.environ)
-    env.update(
-        {
-            "GIT_AUTHOR_NAME": "Test",
-            "GIT_AUTHOR_EMAIL": "test@example.invalid",
-            "GIT_COMMITTER_NAME": "Test",
-            "GIT_COMMITTER_EMAIL": "test@example.invalid",
-        }
-    )
+    env.update(_GIT_IDENTITY)
     return env
 
 
@@ -302,11 +303,24 @@ def test_kill_at_turn_end_without_commit_loses_files(tmp_path):
     assert lkt.exit_code_for(report) == 1
 
 
-def test_intermediate_non_edit_results_do_not_kill_before_commit(tmp_path):
+def test_intermediate_non_edit_results_do_not_kill_before_commit(tmp_path, monkeypatch):
     import tools.live_kill_test as lkt
 
     _require_git()
     _require_tool(BASH, "bash")
+    # This scenario's last action runs the real scripts/developer-commit.sh,
+    # which shells out to `git commit`. lkt.run_and_kill()'s _spawn() and the
+    # fake CLI's own "bash" action both spawn their subprocess with no
+    # explicit env=, so each inherits this pytest process's actual
+    # environment. A CI runner has no global git identity configured (a
+    # local dev machine typically does), so the commit needs
+    # GIT_AUTHOR_*/GIT_COMMITTER_* set here, propagated down through both
+    # subprocess hops via os.environ rather than threaded as an explicit env
+    # dict -- run_and_kill's plan-documented signature takes no env
+    # parameter, and this scenario's fake CLI is a separate process this
+    # test cannot hand one to directly.
+    for key, value in _GIT_IDENTITY.items():
+        monkeypatch.setenv(key, value)
     work = _make_plain_repo(tmp_path)
     base_sha = _head(work)
 
