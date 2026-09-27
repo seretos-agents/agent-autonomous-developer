@@ -66,6 +66,26 @@
  * `.adev/`) are treated as "do not block" — fail-safe, matching
  * hooks/check-mcp-availability.mjs and hooks/check-developer-background-wait.mjs.
  *
+ * ## The harness-launched-developer branch (ticket #141)
+ *
+ * When agent-harness's `harness_start_agent` launches a `developer`, it runs
+ * as a *top-level* `claude` process — not a subagent — so neither
+ * `SubagentStop` nor `hooks/check-developer-background-wait.mjs` ever fires
+ * for it. Only this Stop hook does, and a top-level Stop payload carries no
+ * `agent_type` the way SubagentStop does, so the only identity signal is
+ * `process.env.HARNESS_LAUNCHED_AGENT` (agent-harness PR #54, `<plugin>:<name>`).
+ *
+ * This branch runs **before** the `.adev/` scope gate (a harness-launched
+ * developer's cwd need not carry `.adev/` at all) and checks *exact* string
+ * equality against `HARNESS_DEVELOPER_ID`, never `agentNameOf` — that helper
+ * drops the plugin qualifier, which would wrongly let `other-plugin:developer`
+ * through (misread::F1). It applies condition A (unresolved backgrounded
+ * command/dispatch) with the SubagentStop hook's own message prefix, then
+ * **always exits** — condition B (the orchestrator's commit/push nag) never
+ * applies to a developer child: the orchestrator pushes, not the developer
+ * (#138/#140), so a harness-launched developer must never see it, even in a
+ * cwd that happens to carry `.adev/`.
+ *
  * Block output: write JSON {"decision":"block","reason":"..."} to stdout, exit 0.
  * Pass: exit 0 with no stdout.
  */
@@ -80,6 +100,13 @@ import {
   readTranscriptLines,
   unresolvedBackgroundCommand,
 } from "./lib/turn-end-scan.mjs";
+
+/**
+ * The exact `HARNESS_LAUNCHED_AGENT` value agent-harness sets for a
+ * `harness_start_agent`-launched `developer` run of this plugin. Full-string
+ * equality, plugin qualifier included — never `agentNameOf` (see file header).
+ */
+const HARNESS_DEVELOPER_ID = "agent-autonomous-developer:developer";
 
 /**
  * Run a git command in `cwd` and return trimmed stdout, or null on any
@@ -110,6 +137,33 @@ async function main() {
 
   // --- 2. Never block twice on the same turn ---
   if (payload.stop_hook_active === true) process.exit(0);
+
+  // --- 2b. Harness-launched developer branch (#141) — before the .adev/ gate ---
+  if (process.env.HARNESS_LAUNCHED_AGENT === HARNESS_DEVELOPER_ID) {
+    const harnessLines = readTranscriptLines(payload.transcript_path);
+    const harnessUnresolved = unresolvedBackgroundCommand(harnessLines);
+    if (harnessUnresolved) {
+      block(
+        "developer: turn is ending with a backgrounded command still " +
+          `outstanding (${harnessUnresolved}). This is the ticket #93 / #101 ` +
+          "anti-pattern: a subagent's turn ending TERMINATES it, it is never " +
+          "suspended and resumed, so the backgrounded process is about to be " +
+          'killed and any "I\'ll resume once it completes" expectation cannot ' +
+          "be honored — a Monitor does not change that, nothing wakes a " +
+          "headless process. Backgrounding was never allowed (agents/developer.md " +
+          "Hard Rules, ticket #101). Continue this turn and wait for that " +
+          "command to finish with a blocking foreground Bash call (poll its log " +
+          "or pid with an in-command loop, explicit `timeout`), or kill it and " +
+          "re-run the work as synchronous foreground chunks; then finish the " +
+          "change report with an explicit PASS/FAIL result. (ticket #141)",
+      );
+    }
+    // Condition B (commit/push) never applies to a developer child — the
+    // orchestrator pushes, not the developer (#138/#140) — so this session
+    // always ends here, before the .adev/ scope gate below can even be
+    // reached, regardless of whether cwd happens to carry `.adev/`.
+    process.exit(0);
+  }
 
   // --- 3. Scope gate: only inside a live process-developer run ---
   const cwd = String(payload.cwd ?? "");

@@ -293,23 +293,45 @@ def test_harness_developer_stop_hook_active_does_not_block_twice(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_harness_developer_never_told_to_commit_or_push(tmp_path):
-    """R2 driving test. A worktree WITH `.adev/`, uncommitted changes and an
-    unpushed commit, whose transcript has only foreground calls. No Stop
-    entry may block -- the orchestrator's condition B (commit/push) must
-    never reach a harness-launched developer session.
+def _make_dirty_uncommitted(work: pathlib.Path) -> None:
+    """Trigger only the uncommitted-changes half of condition B: a modified
+    working tree with no new commit at all (0 unpushed commits)."""
+    (work / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")
 
-    Expected RED reason (current, unmodified hook): condition B blocks with
-    "work that no remote has ... push" because the hook has no awareness of
-    HARNESS_LAUNCHED_AGENT at all yet.
-    """
+
+def _make_unpushed_commit(work: pathlib.Path) -> None:
+    """Trigger only the unpushed-commit half of condition B: the tree is
+    clean (everything committed), but that commit was never pushed."""
     git = _git()
-    work = _make_worktree(tmp_path, adev=True)
     (work / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     subprocess.run([git, "-C", str(work), "add", "-A"], check=True)
     subprocess.run(
         [git, "-C", str(work), "commit", "-qm", "work"], check=True, capture_output=True
     )
+
+
+CONDITION_B_TRIGGERS = [
+    pytest.param(_make_dirty_uncommitted, id="uncommitted-changes-only"),
+    pytest.param(_make_unpushed_commit, id="unpushed-commit-only"),
+]
+
+
+@pytest.mark.parametrize("make_trigger", CONDITION_B_TRIGGERS)
+def test_harness_developer_never_told_to_commit_or_push(tmp_path, make_trigger):
+    """R2 driving test. A worktree WITH `.adev/`, whose transcript has only
+    foreground calls, in one of condition B's two independent trigger shapes
+    -- uncommitted changes alone, or an unpushed commit alone (tautology::F1:
+    the fixture must exercise both, not just the unpushed half, or a harness
+    branch that only suppresses the push check would pass unnoticed). No
+    Stop entry may block in either shape -- the orchestrator's condition B
+    (commit/push) must never reach a harness-launched developer session.
+
+    Expected RED reason (current, unmodified hook): condition B blocks with
+    "work that no remote has ... push" because the hook has no awareness of
+    HARNESS_LAUNCHED_AGENT at all yet.
+    """
+    work = _make_worktree(tmp_path, adev=True)
+    make_trigger(work)
     lines = [_tool_use_line("Bash", {"command": "pytest -q tests/test_a.py", "timeout": 600000})]
     results = _run_stop_hooks(work, lines, harness_agent=HARNESS_DEVELOPER_ID)
     for result in results:
