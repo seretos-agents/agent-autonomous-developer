@@ -1,8 +1,9 @@
 /**
  * hooks/check-no-background.mjs
  *
- * PreToolUse hook (matcher `Bash|Monitor`): the mechanical form of the
- * "nothing ever runs in the background" Hard Rule (ticket #101).
+ * PreToolUse hook (matcher `Bash|Monitor|Agent`): the mechanical form of the
+ * "nothing ever runs in the background" Hard Rule (ticket #101, extended to
+ * `Agent` dispatches by #139).
  *
  * ## Why a PreToolUse hook, when two turn-end hooks already exist
  *
@@ -29,10 +30,16 @@
  *   - `Bash` with `run_in_background: true`
  *   - `Bash` whose command detaches on its own: `nohup …`, `Start-Job`,
  *     `Start-Process`, or a trailing `&` (see lib/turn-end-scan.mjs,
- *     backgroundReasonForBash — the same classifier the turn-end hooks use,
- *     so what this hook refuses and what they detect cannot drift apart)
+ *     backgroundReasonForToolUse — the same classifier the turn-end hooks
+ *     use, so what this hook refuses and what they detect cannot drift
+ *     apart)
  *   - every `Monitor` call — a `Monitor` is a promise to be woken, and
  *     nothing wakes a headless session
+ *   - `Agent` with no `run_in_background` key, or any value other than
+ *     `false` (ticket #139) — the Agent tool's own schema backgrounds by
+ *     default, so a long developer/reviewer/critic dispatch is exactly as
+ *     exposed to the 600 s background-task ceiling as a backgrounded `Bash`
+ *     call, and just as silent when it is lost
  *
  * ## Scope gate
  *
@@ -64,7 +71,8 @@ import process from "node:process";
 import {
   NO_BACKGROUND_MARKER,
   agentNameOf,
-  backgroundReasonForBash,
+  backgroundReasonForToolUse,
+  describeToolUse,
 } from "./lib/turn-end-scan.mjs";
 
 /** Subagents of this plugin for which the rule holds unconditionally. */
@@ -86,9 +94,12 @@ const RULE =
   "600000 ms) — the project's AGENTS.md chunks if it names any. A chunk that " +
   "hits the timeout is information, not a reason to background: re-run it " +
   "with a per-test timeout that dumps stacks (e.g. `pytest --timeout=<n> " +
-  "--timeout-method=thread`) and put the dump in the change report. There is " +
-  "no case in which backgrounding is right — if you believe you found one, " +
-  "that is a `blocked` event, not a background task.";
+  "--timeout-method=thread`) and put the dump in the change report. Ticket " +
+  "#139: an Agent dispatch is the same rule — the Agent tool backgrounds by " +
+  "default, so re-issue the call with run_in_background: false when the very " +
+  "next action depends on its result. There is no case in which " +
+  "backgrounding is right — if you believe you found one, that is a " +
+  "`blocked` event, not a background task.";
 
 function refuse(what) {
   process.stderr.write(
@@ -118,12 +129,10 @@ async function main() {
   if (tool === "Monitor") {
     refuse("Monitor");
   }
-  if (tool === "Bash") {
-    const reason = backgroundReasonForBash(payload.tool_input);
-    if (reason !== null) {
-      const command = String(payload.tool_input?.command ?? "(unknown command)");
-      refuse(`Bash(${reason}): ${command}`);
-    }
+  const reason = backgroundReasonForToolUse(tool, payload.tool_input);
+  if (reason !== null) {
+    const label = describeToolUse(tool, payload.tool_input);
+    refuse(`${label} (${reason})`);
   }
 
   process.exit(0);

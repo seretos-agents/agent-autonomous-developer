@@ -2,9 +2,10 @@
  * hooks/check-developer-background-wait.mjs
  *
  * SubagentStop hook: blocks the `developer` subagent from ending its turn
- * while a command it backgrounded — Bash(run_in_background: true), or a
- * command that detaches itself (`nohup … &`, `Start-Job`, `Start-Process`,
- * trailing `&`) — is still unresolved (tickets #93, #101).
+ * while a command or subagent dispatch it backgrounded — Bash(run_in_background:
+ * true), a command that detaches itself (`nohup … &`, `Start-Job`,
+ * `Start-Process`, trailing `&`), or an `Agent` dispatch not given an explicit
+ * `run_in_background: false` — is still unresolved (tickets #93, #101, #139).
  *
  * A subagent's turn ending does not suspend it, it TERMINATES it: the
  * harness kills any background command the subagent started, and the
@@ -35,7 +36,8 @@
  *     a call, so one clear message per turn is a backstop and a second one
  *     would be a hang.
  *   - Reads the JSONL transcript and walks it in order for the most recent
- *     backgrounded Bash call that the PreToolUse hook did not refuse.
+ *     backgrounded Bash call or backgrounded Agent dispatch that the
+ *     PreToolUse hook did not refuse.
  *   - If one is outstanding -> block with a clear message.
  *   - All failure modes (bad stdin, unreadable transcript, wrong agent)
  *     are treated as "do not block" (fail-safe / exit 0), matching the

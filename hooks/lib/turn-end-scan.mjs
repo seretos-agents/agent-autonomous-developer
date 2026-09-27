@@ -3,21 +3,37 @@
  *
  * Shared helpers for the three "nothing ever runs in the background" hooks:
  *
- *   - hooks/check-no-background.mjs               (PreToolUse, #101)
+ *   - hooks/check-no-background.mjs               (PreToolUse, #101, #139)
  *       refuses the call before it happens: Bash(run_in_background: true),
  *       a Bash command that detaches (`nohup … &`, `Start-Job`,
- *       `Start-Process`, trailing `&`), and every `Monitor` call.
+ *       `Start-Process`, trailing `&`), every `Monitor` call, and an `Agent`
+ *       dispatch that backgrounds (no `run_in_background` key, or any value
+ *       other than `false` — the Agent tool's own schema backgrounds by
+ *       default).
  *   - hooks/check-developer-background-wait.mjs   (SubagentStop, #93)
  *       the `developer` subagent must not end its turn while a command it
  *       backgrounded is unresolved.
  *   - hooks/check-session-turn-end.mjs            (Stop, #23)
  *       the top-level `process-developer` session must not end its turn while a
- *       command it backgrounded is unresolved, nor while the package's work
- *       sits uncommitted in the worktree.
+ *       command or subagent dispatch it backgrounded is unresolved, nor while
+ *       the package's work sits uncommitted in the worktree.
  *
- * All three answer the same question — "is this a backgrounded command?" —
- * so the classifier lives here once, and the two turn-end hooks share one
- * transcript walk on top of it.
+ * All three answer the same question — "is this a backgrounded command or
+ * subagent dispatch?" — so the classifier lives here once, and the two
+ * turn-end hooks share one transcript walk on top of it.
+ *
+ * ## Why `Agent` needed its own branch (#139)
+ *
+ * A headless `process-developer` run dispatches long developer/reviewer/critic
+ * work via the `Agent` tool. That tool's own schema backgrounds by default —
+ * "Agents run in the background by default … Set to false only when your
+ * very next action depends on this agent's result" — so an `Agent` call with
+ * no `run_in_background` key, or an explicit `true`, is exactly the shape
+ * this file already refuses for `Bash`: a dispatch the harness can silently
+ * kill at the 600 s background-task ceiling in print mode, with no event
+ * ever posted. Only an explicit `run_in_background: false` is the sanctioned
+ * foreground dispatch (see AGENTS.md, "Every Agent dispatch is unnamed,
+ * synchronous, fresh").
  *
  * ## Why `Monitor` no longer resolves anything (#101)
  *
@@ -85,6 +101,52 @@ export function backgroundReasonForBash(input) {
 }
 
 /**
+ * Classify any tool_use by name/input, dispatching to the right per-tool
+ * rule. Returns a short reason when the call would run something in the
+ * background, null when it is an ordinary foreground call or a tool this
+ * rule does not cover.
+ *
+ * `"Bash"` delegates to backgroundReasonForBash, unchanged. `"Agent"`
+ * backgrounds unless `run_in_background` is explicitly `false` (#139): the
+ * Agent tool's own schema backgrounds by default, so an absent key or any
+ * other value is unresolved, not just an explicit `true`.
+ *
+ * @param {string} name   the tool_use `name`
+ * @param {unknown} input the tool_use `input`
+ * @returns {string | null}
+ */
+export function backgroundReasonForToolUse(name, input) {
+  if (name === "Bash") return backgroundReasonForBash(input);
+  if (name === "Agent") {
+    const runInBackground =
+      input && typeof input === "object" ? input.run_in_background : undefined;
+    if (runInBackground === false) return null;
+    if (runInBackground === true) return "run_in_background: true";
+    return "run_in_background not false (default: background)";
+  }
+  return null;
+}
+
+/**
+ * A short human-readable label for a tool_use, for refusal/block messages.
+ * A `Bash` call is described by its command; an `Agent` call is described as
+ * `Agent(<subagent_type ?? description>)`, since neither a bare command nor
+ * a blank label would mean anything for a subagent dispatch.
+ *
+ * @param {string} name   the tool_use `name`
+ * @param {unknown} input the tool_use `input`
+ * @returns {string}
+ */
+export function describeToolUse(name, input) {
+  const obj = input && typeof input === "object" ? input : {};
+  if (name === "Agent") {
+    const label = obj.subagent_type ?? obj.description ?? "(unknown)";
+    return `Agent(${label})`;
+  }
+  return String(obj.command ?? "(unknown command)");
+}
+
+/**
  * The agent-name segment of a hook payload's `agent_type`.
  *
  * Plain substring matching is unsafe in this plugin: its id is
@@ -117,9 +179,9 @@ export function readTranscriptLines(transcriptPath) {
 }
 
 /**
- * Walk a transcript and report the command of the most recent backgrounded
- * Bash call (see backgroundReasonForBash) that actually ran — i.e. that the
- * PreToolUse hook did not refuse.
+ * Walk a transcript and report a label for the most recent backgrounded
+ * Bash call or Agent dispatch (see backgroundReasonForToolUse) that actually
+ * ran — i.e. that the PreToolUse hook did not refuse.
  *
  * A `Monitor` call does NOT resolve it (#101, see the file header). The
  * refusal marker does: a line after the call that carries
@@ -128,7 +190,7 @@ export function readTranscriptLines(transcriptPath) {
  * transcript is not the failure these hooks exist to catch.
  *
  * @param {string[] | null} lines
- * @returns {string | null} the unresolved command, or null when there is none
+ * @returns {string | null} the unresolved command/dispatch label, or null when there is none
  */
 export function unresolvedBackgroundCommand(lines) {
   if (!Array.isArray(lines)) return null;
@@ -172,9 +234,8 @@ export function unresolvedBackgroundCommand(lines) {
 
     for (const item of content) {
       if (!item || item.type !== "tool_use") continue;
-      if (item.name !== "Bash") continue;
-      if (backgroundReasonForBash(item.input) === null) continue;
-      unresolved = String(item.input.command ?? "(unknown command)");
+      if (backgroundReasonForToolUse(item.name, item.input) === null) continue;
+      unresolved = describeToolUse(item.name, item.input);
     }
   }
 

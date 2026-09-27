@@ -28,12 +28,15 @@
  *
  * Two independent conditions, both scoped to a live `process-developer` run:
  *
- *   A. **Unresolved backgrounded command** — the #23 anti-pattern proper.
- *      Same detection as the #93 SubagentStop hook (shared in lib/), because
- *      it is the same mistake at a different level. Since #101 a `Monitor`
- *      call no longer counts as resolving it (agent-worktree#176 died with
- *      one armed); the PreToolUse hook hooks/check-no-background.mjs refuses
- *      the call up front, and this condition is the backstop behind it.
+ *   A. **Unresolved backgrounded command or subagent dispatch** — the #23
+ *      anti-pattern proper. Same detection as the #93 SubagentStop hook
+ *      (shared in lib/), because it is the same mistake at a different
+ *      level — since #139 this also covers a backgrounded `Agent` dispatch
+ *      (no `run_in_background` key, or any value other than `false`), not
+ *      just a backgrounded `Bash` call. Since #101 a `Monitor` call no
+ *      longer counts as resolving it (agent-worktree#176 died with one
+ *      armed); the PreToolUse hook hooks/check-no-background.mjs refuses the
+ *      call up front, and this condition is the backstop behind it.
  *
  *   B. **Unpreserved work** — the worktree has uncommitted changes, or commits
  *      that exist on no remote. This is the damage #23 and #22 actually did:
@@ -112,23 +115,28 @@ async function main() {
   const cwd = String(payload.cwd ?? "");
   if (!cwd || !existsSync(path.join(cwd, ".adev"))) process.exit(0);
 
-  // --- 4. Condition A: a backgrounded command nothing waited on ---
+  // --- 4. Condition A: a backgrounded command or subagent dispatch nothing waited on ---
   const lines = readTranscriptLines(payload.transcript_path);
   const unresolved = unresolvedBackgroundCommand(lines);
   if (unresolved) {
     block(
-      "process-developer: the turn is ending with a backgrounded command still " +
-        `unresolved (${unresolved}). This is the ticket #23 anti-pattern. ` +
-        "This session is headless (claude -p): there is no loop that wakes it " +
-        "after the turn ends, so ENDING THE TURN ENDS THE PROCESS and that " +
-        "command is killed with it — no wait-ceiling setting changes that " +
-        "(measured on #140 at 600s, at 0, and at 2h; all three died). A " +
-        "Monitor does not help either — nothing wakes a headless process " +
-        "(agent-worktree#176, ticket #101). Backgrounding was never allowed. " +
-        "Continue this turn and wait for that command with a blocking " +
-        "foreground Bash call (poll its log or pid in an in-command loop, " +
-        "explicit `timeout`), or kill it and re-run the work as synchronous " +
-        "foreground chunks. Do not end the turn expecting to be resumed.",
+      "process-developer: the turn is ending with a backgrounded command or " +
+        `subagent dispatch still unresolved (${unresolved}). This is the ` +
+        "ticket #23 anti-pattern. This session is headless (claude -p): " +
+        "there is no loop that wakes it after the turn ends, so ENDING THE " +
+        "TURN ENDS THE PROCESS and that command or dispatch is killed with " +
+        "it — no wait-ceiling setting changes that (measured on #140 at " +
+        "600s, at 0, and at 2h; all three died). A Monitor does not help " +
+        "either — nothing wakes a headless process (agent-worktree#176, " +
+        "ticket #101). Backgrounding was never allowed, and an Agent " +
+        "dispatch with no run_in_background key (or any value other than " +
+        "false) backgrounds by default just like Bash(run_in_background: " +
+        "true) (ticket #139). Continue this turn and wait for it with a " +
+        "blocking foreground call — re-issue an Agent dispatch with " +
+        "run_in_background: false, or poll a Bash command's log/pid in an " +
+        "in-command loop with an explicit `timeout` — or kill it and re-run " +
+        "the work as synchronous foreground chunks. Do not end the turn " +
+        "expecting to be resumed.",
     );
   }
 

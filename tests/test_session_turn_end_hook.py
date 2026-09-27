@@ -262,6 +262,85 @@ def test_blocks_on_unpushed_commits(tmp_path):
     _assert_blocked(_run_hook(work, []), "unpushed")
 
 
+def _agent_tool_use_line(run_in_background: object) -> str:
+    """An Agent tool_use transcript line per the plan's P1 shape. `None`
+    means the key is absent — the real default-background case, since the
+    Agent tool's own schema backgrounds unless told `false`."""
+    input_ = {
+        "description": "dispatch developer",
+        "subagent_type": "agent-autonomous-developer:developer",
+        "prompt": "implement the plan",
+    }
+    if run_in_background is not None:
+        input_["run_in_background"] = run_in_background
+    return _tool_use_line("Agent", input_)
+
+
+@pytest.mark.parametrize("run_in_background", [None, True], ids=["absent", "true"])
+def test_blocks_unresolved_background_agent_dispatch(tmp_path, run_in_background):
+    """R3 (#139): a long developer dispatch made via the Agent tool
+    backgrounds by default (no run_in_background key, or an explicit True) —
+    the #23 backstop must catch an unrefused one exactly like a backgrounded
+    Bash call, or the session ends its turn, the dispatch is killed by the
+    harness's background-task ceiling, and no event is ever posted."""
+    work = _make_worktree(tmp_path)
+    lines = [_agent_tool_use_line(run_in_background)]
+    result = _run_hook(work, lines)
+    assert result.returncode == 0
+    assert result.stdout.strip(), (
+        f"expected a block decision; got empty stdout. stderr: {result.stderr!r}"
+    )
+    decision = json.loads(result.stdout)
+    assert decision.get("decision") == "block"
+    reason = decision.get("reason", "")
+    assert "#23" in reason
+    assert "Agent(" in reason, f"block reason must describe the Agent(...) dispatch; got: {reason!r}"
+
+
+def test_passes_when_agent_dispatch_was_refused(tmp_path):
+    """A call the PreToolUse hook already refused never ran — blocking the
+    stop would trap the agent behind a call it cannot undo."""
+    work = _make_worktree(tmp_path)
+    lines = [
+        _agent_tool_use_line(None),
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": (
+                                "[adev-no-background] refused "
+                                "Agent(agent-autonomous-developer:developer) "
+                                "(run_in_background not false (default: background)). …"
+                            ),
+                        }
+                    ]
+                },
+            }
+        ),
+    ]
+    _assert_passed(_run_hook(work, lines))
+
+
+def test_passes_with_explicit_foreground_agent_dispatch(tmp_path):
+    """An explicit `run_in_background: false` is the one foreground shape and
+    must not block."""
+    work = _make_worktree(tmp_path)
+    lines = [_agent_tool_use_line(False)]
+    _assert_passed(_run_hook(work, lines))
+
+
+def test_stop_hook_active_never_blocks_on_agent_dispatch_either(tmp_path):
+    """One clear message per turn is a backstop; a second one for the same
+    unresolved Agent dispatch would be a hang."""
+    work = _make_worktree(tmp_path)
+    lines = [_agent_tool_use_line(None)]
+    _assert_passed(_run_hook(work, lines, stop_hook_active=True))
+
+
 def test_scope_gate_no_adev_directory(tmp_path):
     """A Stop hook fires in every session that loads this plugin. Without the
     `.adev/` marker of a live pipeline run it must never block — otherwise a
