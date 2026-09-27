@@ -43,7 +43,11 @@ really runs the given argv (so Scenario B's commit step is the real
 production script, not a stub), and the script always ends by printing the
 canned `result` event (unless told not to) and then sleeping, so the
 harness's kill is always a kill of a process still genuinely alive -- never
-a race against the fake CLI exiting on its own first.
+a race against the fake CLI exiting on its own first. Every `write`/`edit`/
+`bash` action also emits a real `tool_result` event immediately after its
+`tool_use` (test-critic tautology::F3), so a harness that incorrectly
+triggers on `tool_result` rather than only on the turn-terminal `result`
+event fires early and is caught by Scenario B's committed-files assertions.
 """
 
 from __future__ import annotations
@@ -131,6 +135,7 @@ def _is_committed(repo: pathlib.Path, base_sha: str, relpath: str) -> bool:
 
 _FAKE_CLI_SRC = '''\
 import json
+import os
 import subprocess
 import sys
 import time
@@ -146,34 +151,66 @@ def main():
         if kind in ("write", "edit"):
             with open(action["path"], "w", encoding="utf-8") as out:
                 out.write(action["content"])
+            reported_path = action["path"]
+            if action.get("as_absolute"):
+                reported_path = os.path.abspath(reported_path)
+            tool_use_id = "t%d" % next_id
+            next_id += 1
             event = {
                 "type": "assistant",
                 "message": {
                     "content": [{
                         "type": "tool_use",
-                        "id": "t%d" % next_id,
+                        "id": tool_use_id,
                         "name": "Write" if kind == "write" else "Edit",
-                        "input": {"file_path": action["path"]},
+                        "input": {"file_path": reported_path},
                     }]
                 },
             }
-            next_id += 1
             print(json.dumps(event), flush=True)
+            # A real turn always follows a tool_use with a matching
+            # tool_result before the next tool call -- test-critic
+            # tautology::F3: without this, a harness that (incorrectly)
+            # triggers on any tool_result event could never be caught,
+            # because the fake stream never contained one.
+            result_event = {
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": "ok",
+                    }]
+                },
+            }
+            print(json.dumps(result_event), flush=True)
         elif kind == "bash":
             subprocess.run(action["argv"], check=False)
+            tool_use_id = "t%d" % next_id
+            next_id += 1
             event = {
                 "type": "assistant",
                 "message": {
                     "content": [{
                         "type": "tool_use",
-                        "id": "t%d" % next_id,
+                        "id": tool_use_id,
                         "name": "Bash",
                         "input": {"command": " ".join(action["argv"])},
                     }]
                 },
             }
-            next_id += 1
             print(json.dumps(event), flush=True)
+            result_event = {
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": "ok",
+                    }]
+                },
+            }
+            print(json.dumps(result_event), flush=True)
         elif kind == "text":
             event = {
                 "type": "assistant",
@@ -256,6 +293,14 @@ def test_kill_at_turn_end_without_commit_loses_files(tmp_path):
         "a kill exactly at `result` must leave both edited files uncommitted"
     )
 
+    # test-critic tautology::F5: also assert against the tool's *own*
+    # report/exit-status logic, not just this test's independent
+    # recomputation from git state above.
+    report = lkt.build_report(work, base_sha, result)
+    assert sorted(report["uncommitted_files"]) == ["a.txt", "b.txt"]
+    assert report["committed_files"] == []
+    assert lkt.exit_code_for(report) == 1
+
 
 def test_intermediate_non_edit_results_do_not_kill_before_commit(tmp_path):
     import tools.live_kill_test as lkt
@@ -295,6 +340,13 @@ def test_intermediate_non_edit_results_do_not_kill_before_commit(tmp_path):
             "intermediate non-edit (Bash) result would have fired before "
             "the real developer-commit.sh call and left it uncommitted"
         )
+
+    # test-critic tautology::F5: also assert against the tool's own report
+    # and exit-status logic, not just this test's independent recomputation.
+    report = lkt.build_report(work, base_sha, result)
+    assert sorted(report["committed_files"]) == ["a.txt", "b.txt"]
+    assert report["uncommitted_files"] == []
+    assert lkt.exit_code_for(report) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +393,33 @@ def test_no_edit_observed_reports_empty_edited_files(tmp_path):
 
     assert result["trigger"] == "result"
     assert result["edited_files"] == []
+
+
+def test_absolute_edited_path_is_relativized_to_cwd(tmp_path):
+    """test-critic tautology::F4: the fake previously always sent a bare
+    relative file_path, so 'repo-relative' was never actually exercised.
+    Here the fake reports an absolute path (as the real CLI does); the
+    harness must relativize it against cwd."""
+    import tools.live_kill_test as lkt
+
+    _require_git()
+    work = _make_plain_repo(tmp_path)
+    actions = [
+        {"kind": "write", "path": "abs.txt", "content": "A\n", "as_absolute": True},
+        {"kind": "text", "text": "done"},
+    ]
+    fake_cli, actions_path = _write_fake_cli(tmp_path, actions)
+
+    result = lkt.run_and_kill(
+        [sys.executable, str(fake_cli), str(actions_path)],
+        cwd=str(work),
+        timeout=30,
+    )
+
+    assert result["trigger"] == "result"
+    assert result["edited_files"] == ["abs.txt"], (
+        f"expected the absolute path relativized to 'abs.txt', got {result['edited_files']!r}"
+    )
 
 
 def test_non_json_lines_are_ignored(tmp_path):

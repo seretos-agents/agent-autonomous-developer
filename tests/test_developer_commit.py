@@ -135,14 +135,24 @@ def test_dirty_tree_is_committed_and_not_pushed(tmp_path):
     assert result.returncode == 0, (
         f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-    assert re.match(r"^developer-commit: committed [0-9a-f]{7,40}\s*$", result.stdout.strip()), (
-        f"unexpected stdout: {result.stdout!r}"
-    )
+    match = re.match(r"^developer-commit: committed ([0-9a-f]{7,40})\s*$", result.stdout.strip())
+    assert match, f"unexpected stdout: {result.stdout!r}"
     assert _porcelain(work) == "", "tree must be clean after the commit"
     assert _rev_count(work) == before_count + 1, "exactly one new commit expected"
     assert _remote_head(remote) == before_remote_sha, (
         "developer-commit.sh must never push -- the bare origin's main must "
         "stay exactly where it was"
+    )
+
+    # Test-critic tautology::F2: the printed sha must be the *real* new HEAD,
+    # not just any 7-40 hex string (a script could print a fixed/stale sha
+    # and this regex alone would still pass).
+    printed_sha = match.group(1)
+    real_head = _head(work)
+    real_short = _g(work, "rev-parse", "--short", "HEAD").stdout.strip()
+    assert printed_sha == real_short or real_head.startswith(printed_sha), (
+        f"printed sha {printed_sha!r} does not match the real new HEAD "
+        f"{real_head!r} (short {real_short!r})"
     )
 
     changed = _g(work, "show", "--name-only", "--format=", "HEAD").stdout.split()
@@ -267,21 +277,33 @@ def test_detached_head_skips(tmp_path):
     assert _porcelain(work) == before_status
 
 
-def test_missing_argument_and_non_repo_path_exit_two(tmp_path):
+def test_missing_message_argument_exits_two(tmp_path):
+    """Edge case for R2: a missing <message> exits 2 -- against a *real,
+    existing* git work tree, so this can only pass because the script itself
+    checks for <message>, not incidentally because the work-tree check also
+    returns 2 for a path that doesn't exist (test-critic tautology::F1)."""
+    _require_git()
     _require_tool(BASH, "bash")
+    work, _remote = _make_repo(tmp_path)
 
     result = subprocess.run(
-        [BASH, str(SCRIPT), str(tmp_path / "work")],
+        [BASH, str(SCRIPT), str(work)],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 2, f"missing argument: rc={result.returncode} stderr={result.stderr!r}"
 
+
+def test_non_repo_path_exits_two(tmp_path):
+    """Edge case for R2: a non-repo path exits 2 even when <message> is
+    given, isolating the work-tree check from the argument-count check."""
+    _require_tool(BASH, "bash")
+
     not_a_repo = tmp_path / "not-a-repo"
     not_a_repo.mkdir()
-    result2 = subprocess.run(
+    result = subprocess.run(
         [BASH, str(SCRIPT), str(not_a_repo), "msg"],
         capture_output=True,
         text=True,
     )
-    assert result2.returncode == 2, f"non-repo path: rc={result2.returncode} stderr={result2.stderr!r}"
+    assert result.returncode == 2, f"non-repo path: rc={result.returncode} stderr={result.stderr!r}"
