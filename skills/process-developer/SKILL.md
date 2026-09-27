@@ -163,7 +163,13 @@ than trying to end the turn again.
 
 A named procedure, fired not just at turn end but at every point in this
 pipeline that changes the tree, so a hard kill from outside loses at most
-one checkpoint's worth of work (ticket #115). **Scratch is never staged:**
+one checkpoint's worth of work (ticket #115). The commit half already runs
+inside every developer dispatch — its last tool call is
+`scripts/developer-commit.sh` (`agents/developer.md` step 6, ticket #138) —
+so this procedure commits only what is still left and does **every** push.
+For that, **every `developer` dispatch in this document carries
+`ticket=<package>`** alongside its other inputs; the developer puts it in its
+commit message. **Scratch is never staged:**
 `<rundir>` = `<worktree_path>/.adev/<package>-<attempt>/`, and precondition 4
 has already appended `.adev/` to the target repo's `.gitignore` (Phase 5
 step 1 re-verifies with `git -C <worktree_path> check-ignore .adev`), so
@@ -184,7 +190,10 @@ step 1 re-verifies with `git -C <worktree_path> check-ignore .adev`), so
      `HEAD`.
    - A clean tree with unpushed commits skips the commit step below but
      still pushes.
-2. **Commit**, unless the clean-tree guard applied: `git -C <worktree_path>
+2. **Commit — fallback**, unless the clean-tree guard applied. What is left
+   here is whatever a developer dispatch did not commit itself (it died or
+   failed before its own step-6 commit) plus your own edits (the
+   `.gitignore` append of precondition 4). `git -C <worktree_path>
    add -A`; commit single-line with `-m "<summary> (#<ticket>)"`.
    Multi-line **only** via `Write <rundir>/commit-msg.txt` then
    `git -C <worktree_path> commit -F <rundir>/commit-msg.txt` — never a
@@ -495,8 +504,8 @@ dispatch below passes `plan_path=<rundir>/plan.md` and the current `round`
 number, and the planner `Write`s its plan there itself instead of returning
 the full text. Every later phase in this document that takes a `plan` input
 means this same absolute path — pass it as-is and let the receiving agent
-`Read` it; `agents/developer.md`/`agents/reviewer.md` are unchanged and still
-describe `plan` as inlined text, but their existing `Read` grant and their own
+`Read` it; `agents/developer.md`/`agents/reviewer.md` still describe `plan` as
+inlined text, but their existing `Read` grant and their own
 Hard Rule on reading inputs already cover a path value, so the dispatch prompt
 you compose is the one place that has to say "absolute path — read it with
 `Read`."
@@ -592,7 +601,7 @@ Two developer dispatches, both fresh and unnamed.
 
 **3a — tests (`phase=tests`).** Before round 1's dispatch, capture
 `base_sha=$(git -C <worktree_path> rev-parse HEAD)` **once**, before this
-loop's first Checkpoint runs — this is the commit that predates every round's
+loop's first developer dispatch commits anything — this is the commit that predates every round's
 test-file commits, and it is reused, unchanged, for every round's diff below;
 it is never re-captured mid-loop.
 
@@ -608,17 +617,17 @@ files>` plus `git diff --no-index /dev/null <new file>` for any file still
 untracked at HEAD.** Always diff against the fixed `base_sha` captured above,
 **never** against a plain working-tree/HEAD diff (i.e. never
 `git diff -- <test files>` with no base argument) — this matters starting
-round 2: round 1's Checkpoint below commits round 1's test files, so by round
+round 2: round 1's test files are committed by the end of round 1, so by round
 2 a base-less diff would compare the working tree against a HEAD that already
 contains round 1's committed tests, silently capturing only round 2's
 incremental edits and dropping the tests test-critic already saw and must
 re-evaluate in full. Diffing against `base_sha` on every round instead always
 yields the full cumulative test diff since before this loop started,
 regardless of how many rounds' worth of commits sit between `base_sha` and
-HEAD. Capture it **before** the Checkpoint procedure runs, because the
-checkpoint's `git add -A` + commit would otherwise track/commit the new test
-files first and leave both the tracked-file diff and the untracked-file
-fallback with nothing to show. Only then run the **Checkpoint** procedure,
+HEAD. The developer has usually already committed the test files itself
+(its own last tool call); diffing against `base_sha` captures them either
+way, and the untracked-file fallback covers a dispatch whose own commit did
+not happen. Write `tests.diff` first, then run the **Checkpoint** procedure,
 `push_mode=plain` — the RED tests are worth preserving before the test
 critique runs. Then dispatch `test-critic` (fresh, unnamed) with `plan_file`,
 `tests_file=<rundir>/tests.diff`, `output_dir=<rundir>/test-critic-<round>/`.
